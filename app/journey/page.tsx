@@ -20,20 +20,25 @@ import {
   CreditCard,
   Map,
   List,
+  Hotel,
+  Compass,
+  ChevronRight,
+  Sliders,
 } from "lucide-react";
+
 import Link from "next/link";
 import { useSettings } from "@/lib/settings-context";
 import { t } from "@/services/translations";
 import { searchLocations } from "@/services/geocoding";
-import { getRoute, RouteData } from "@/services/routing";
+import { getRoute } from "@/services/routing";
 import { getWeather } from "@/services/weather";
 import { fetchNearbyPlaces } from "@/services/overpass";
 import { generateDynamicPlan, DynamicAiPlan } from "@/services/ai";
-import MapWrapper from "@/components/map-wrapper";
-import { Location, WeatherCondition } from "@/types/planner";
+import { JourneyMap } from "@/components/map/JourneyMap";
+import { Location } from "@/types/planner";
 import { FoodStop, Essential, Attraction, JourneyRoute, WeatherData, BudgetBreakdown, CarbonData, TravelPreference } from "@/types/journey";
 
-// Import panels
+// Existing panels
 import { RoutePanel } from "@/components/journey/route-panel";
 import { WeatherPanel } from "@/components/journey/weather-panel";
 import { FoodPanel } from "@/components/journey/food-panel";
@@ -41,10 +46,46 @@ import { EssentialsPanel } from "@/components/journey/essentials-panel";
 import { AttractionsPanel } from "@/components/journey/attractions-panel";
 import { BudgetPanel } from "@/components/journey/budget-panel";
 import { CarbonPanel } from "@/components/journey/carbon-panel";
-import { AiSuggestionsPanel } from "@/components/journey/ai-suggestions-panel";
+import { AiCopilotPanel } from "@/components/journey/ai-copilot-panel";
+
 import { ItineraryPanel } from "@/components/journey/itinerary-panel";
 import { ExplainabilityPanel } from "@/components/journey/explainability-panel";
 import { TicketBooking } from "@/components/ticket-booking";
+
+// Phase 1 — new panels & components
+import { JourneyHealthBadge } from "@/components/ui/JourneyHealthBadge";
+import { BudgetMeter } from "@/components/ui/BudgetMeter";
+import { MultiDayItineraryPanel } from "@/components/journey/multi-day-itinerary-panel";
+import { AccommodationPanel } from "@/components/journey/accommodation-panel";
+import { WhatNextPanel } from "@/components/journey/what-next-panel";
+import { GeolocationConsent } from "@/components/GeolocationConsent";
+import { WhatIfPanel } from "@/components/ui/WhatIfPanel";
+import { DeviationBanner } from "@/components/ui/DeviationBanner";
+// Phase 4 — Voice Copilot
+import { VoiceCopilot } from "@/components/ui/VoiceCopilot";
+// Phase 6 — Trip Export
+import { TripExportBar } from "@/components/ui/TripExportBar";
+// Phase 7 — Deviation loop with TTS
+import { useDeviationLoop } from "@/hooks/useDeviationLoop";
+
+
+import {
+  useTripActions,
+  useTripData,
+  useBudgetState,
+  useBudgetActions,
+  useJourneyActions,
+  useGeolocationConsent,
+  useLiveCoords,
+  useDeviationDetected,
+  useActiveTab,
+  useUIActions,
+} from "@/hooks/useTripStore";
+
+
+import { estimateBudget, getBudgetRisk } from "@/lib/budget-engine";
+import { detectDeviation } from "@/lib/journey-engine";
+import type { TripDay } from "@/lib/schemas";
 
 type Tab = {
   id: string;
@@ -56,23 +97,176 @@ type Tab = {
 function JourneyContent() {
   const searchParams = useSearchParams();
   const { language, safetyMode, setSafetyMode } = useSettings();
-  
-  const [activeTab, setActiveTab] = useState("route");
+
+  // Phase 1 — Zustand store
+  const tripData = useTripData();
+  const budgetData = useBudgetState();
+  const { initTrip } = useTripActions();
+  const { setAllocation, setBudgetRisk } = useBudgetActions();
+  const { setLiveCoords, setHealth, setDeviation } = useJourneyActions();
+  const geolocationConsent = useGeolocationConsent();
+  const liveCoords = useLiveCoords();
+  const deviationDetected = useDeviationDetected();
+
+  // Group I — local state
+  const [showGeoConsent, setShowGeoConsent] = useState(false);
+  const [multiDayPlan, setMultiDayPlan] = useState<TripDay[]>([]);
+
+  // Phase 4: activeTab now lives in the Zustand store so voice commands can
+  // switch tabs directly via useVoiceCommands without prop threading.
+  const activeTab = useActiveTab();
+  const { setActiveTab } = useUIActions();
+
   const [loading, setLoading] = useState(true);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"routes" | "map">("routes");
 
-  // Search parameters
-  const from = searchParams.get("from") || "Kochi Airport";
-  const to = searchParams.get("to") || "Marine Drive";
-  const date = searchParams.get("date") || new Date().toISOString().split("T")[0];
-  const budgetParam = Number(searchParams.get("budget") || "5000");
-  const travellers = Number(searchParams.get("travellers") || "1");
-  const preferencesParam = searchParams.get("preferences") || "";
-  const safetyParam = searchParams.get("safety") === "true";
+
+  // URL params — may come from old bookmarks or planner redirect
+  const from = tripData?.from || searchParams.get("from") || "Kochi Airport";
+  const to = tripData?.to || searchParams.get("to") || "Marine Drive";
+  const date = tripData?.departureDate || searchParams.get("date") || new Date().toISOString().split("T")[0];
+  const budgetParam = tripData?.budget || Number(searchParams.get("budget") || "5000");
+  const travellers = tripData?.travellers || Number(searchParams.get("travellers") || "1");
+  const preferencesParam = tripData?.preferences?.join(",") || searchParams.get("preferences") || "";
+  const safetyParam = tripData?.safetyMode ?? searchParams.get("safety") === "true";
+
+  // Migration shim: if the store is empty but URL params exist, seed the store
+  useEffect(() => {
+    const urlFrom = searchParams.get("from");
+    const urlTo = searchParams.get("to");
+    if (urlFrom && urlTo && !tripData?.from) {
+      initTrip({
+        from: urlFrom,
+        to: urlTo,
+        departureDate: searchParams.get("date") || undefined,
+        travellers: Number(searchParams.get("travellers") || "1"),
+        budget: Number(searchParams.get("budget") || "0"),
+        currency: "INR",
+        preferences: (searchParams.get("preferences") || "").split(",").filter(Boolean),
+        travelerProfile: "solo",
+        safetyMode: searchParams.get("safety") === "true",
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally runs once on mount
+
+  // ── Group I-A: Budget engine auto-run ────────────────────────────────────────
+  // Runs whenever trip data becomes available (from store or URL shim).
+  // Writes results to budget-slice so BudgetMeter stays live.
+  useEffect(() => {
+    if (!tripData) return;
+    try {
+      const allocation = estimateBudget(tripData);
+      setAllocation(allocation);
+      setBudgetRisk(getBudgetRisk(allocation, budgetData.committedAmount));
+    } catch {
+      // Budget engine is best-effort; swallow errors silently
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripData?.from, tripData?.to, tripData?.departureDate, tripData?.returnDate,
+      tripData?.travellers, tripData?.budget, tripData?.accommodationPreference]);
+
+  // ── Group I-B: Multi-day plan fetch ──────────────────────────────────────────
+  // Calls /api/ai/trip when trip data is ready and returns structured TripDay[].
+  useEffect(() => {
+    if (!tripData?.from || !tripData?.to) return;
+    let cancelled = false;
+
+    async function fetchMultiDayPlan() {
+      try {
+        const res = await fetch("/api/ai/trip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from: tripData?.from,
+            to: tripData?.to,
+            departureDate: tripData?.departureDate,
+            returnDate: tripData?.returnDate,
+            travellers: tripData?.travellers ?? 1,
+            budget: tripData?.budget ?? 0,
+            currency: tripData?.currency ?? "INR",
+            preferences: tripData?.preferences ?? [],
+          }),
+        });
+        if (cancelled || !res.ok) return;
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.days)) {
+          setMultiDayPlan(data.days as TripDay[]);
+        }
+      } catch {
+        // Multi-day plan is optional; fail silently
+      }
+    }
+
+    fetchMultiDayPlan();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripData?.from, tripData?.to, tripData?.departureDate]);
+
+  // ── Group I-C: GPS watchPosition (only after consent granted) ────────────────
+  // Writes live coords to journey-slice. Detects deviation if > 300m off route.
+  useEffect(() => {
+    if (!geolocationConsent) return;
+    if (typeof navigator === "undefined" || !navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const coords: [number, number] = [pos.coords.latitude, pos.coords.longitude];
+        setLiveCoords(coords);
+
+        // Group M2: real haversine deviation check via journey-engine.detectDeviation()
+        // routeGeometry is [lat, lng] pairs from OSRM — matches engine expectation
+        const isOff = routeGeometry.length > 0
+          ? detectDeviation(coords, routeGeometry, 300)
+          : false;
+        setDeviation(isOff);
+        setHealth(isOff ? "at_risk" : "on_track");
+      },
+
+      () => {
+        // On error (denied mid-session), just stop — don't revoke consent forcibly
+      },
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 30_000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geolocationConsent]);
+
+  // ── Group I-D: Prompt geolocation consent once after data loads ───────────────
+  useEffect(() => {
+    if (!geolocationConsent && !loading) {
+      // Small delay so the main journey UI renders first
+      const t = setTimeout(() => setShowGeoConsent(true), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [loading, geolocationConsent]);
+
+  // ── Phase 7: Deviation TTS alert loop (30s) ───────────────────────────────
+  // routeGeometry is populated after OSRM fetch — hook is a no-op until then
+  const { speak: speakFn } = (() => {
+    // Lazily import speak from useVoice — safe because useVoice is always mounted
+    // We access via a global CustomEvent so we don't need to call useVoice again here
+    return {
+      speak: (text: string) => {
+        if (typeof window === "undefined") return;
+        window.dispatchEvent(new CustomEvent("flowroute:tts-speak", { detail: { text } }));
+      },
+    };
+  })();
+
+  useDeviationLoop(routeGeometry, {
+    tts: speakFn,
+    onDeviation: () => {
+      // Health badge already updated by watchPosition; deviation banner
+      // is rendered via deviationDetected from store
+    },
+  });
 
   // Dynamic state loaded from real APIs
+
   const [origin, setOrigin] = useState<Location | null>(null);
   const [destination, setDestination] = useState<Location | null>(null);
   const [routeGeometry, setRouteGeometry] = useState<[number, number][]>([]);
@@ -360,7 +554,12 @@ function JourneyContent() {
     { id: "booking", label: language === "en" ? "Tickets" : language === "hi" ? "टिकट" : "ടിക്കറ്റുകൾ", icon: CreditCard },
     { id: "explainability", label: t("whyThisRoute", language) === "Why this route?" ? "AI Audit" : "ഓഡിറ്റ്", icon: ShieldCheck },
     { id: "itinerary", label: t("tabItinerary", language), icon: Calendar },
+    { id: "multiday", label: language === "en" ? "Trip Plan" : language === "hi" ? "यात्रा योजना" : "യാത്ര പ്ലാൻ", icon: Compass },
+    { id: "accommodation", label: language === "en" ? "Stay" : language === "hi" ? "ठहरना" : "താമസം", icon: Hotel },
+    { id: "whatnext", label: language === "en" ? "What Next" : language === "hi" ? "आगे क्या" : "അടുത്തത്", icon: ChevronRight },
+    { id: "whatif", label: language === "en" ? "What If" : language === "hi" ? "क्या होगा" : "എന്ത് ആകും", icon: Sliders },
     { id: "weather", label: t("tabWeather", language), icon: CloudSun },
+
     { id: "food", label: t("tabFood", language), icon: Utensils, badge: foodStops.length || undefined },
     { id: "essentials", label: t("tabEssentials", language), icon: ShieldCheck, badge: essentials.length || undefined },
     { id: "attractions", label: t("tabSights", language), icon: Landmark, badge: attractions.length || undefined },
@@ -383,14 +582,56 @@ function JourneyContent() {
     ),
     explainability: <ExplainabilityPanel metrics={aiPlan?.explainability || []} />,
     itinerary: <ItineraryPanel itinerary={aiPlan?.itinerary || []} />,
+    // Phase 1 — new panels (Group I-B: multiday wired from /api/ai/trip)
+    multiday: (
+      <div className="flex flex-col gap-3">
+        {multiDayPlan.length === 0 && (
+          <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+            <span className="text-2xl">🗺️</span>
+            <p className="text-sm text-slate-400">Generating your multi-day plan…</p>
+            <div className="w-5 h-5 border-2 border-brand-cyan/30 border-t-brand-cyan rounded-full animate-spin mt-1" />
+          </div>
+        )}
+        <MultiDayItineraryPanel days={multiDayPlan} />
+      </div>
+    ),
+    accommodation: <AccommodationPanel />,
+    whatnext: <WhatNextPanel />,
+    whatif: <WhatIfPanel />,
     weather: weather ? <WeatherPanel weather={weather} /> : null,
+
     food: <FoodPanel foodStops={foodStops} />,
     essentials: <EssentialsPanel essentials={essentials} />,
     attractions: <AttractionsPanel attractions={attractions} />,
-    budget: budgetBreakdown ? <BudgetPanel budgetBreakdown={budgetBreakdown} /> : null,
+    budget: (
+      <div className="flex flex-col gap-4">
+        {/* Group I-A: BudgetMeter always visible when allocation exists */}
+        {budgetData.allocation && (
+          <BudgetMeter
+            committed={budgetData.committedAmount}
+            total={
+              budgetData.allocation.transport.amount +
+              budgetData.allocation.accommodation.amount +
+              budgetData.allocation.food.amount +
+              budgetData.allocation.activities.amount +
+              budgetData.allocation.reserve.amount
+            }
+            currency={budgetData.allocation.transport.currency}
+            className="mb-2"
+          />
+        )}
+        {budgetBreakdown ? <BudgetPanel budgetBreakdown={budgetBreakdown} /> : null}
+      </div>
+    ),
     carbon: carbon ? <CarbonPanel carbon={carbon} /> : null,
-    ai: aiPlan ? <AiSuggestionsPanel aiSuggestions={aiPlan.aiSuggestions} /> : null,
-  }), [routes, weather, foodStops, essentials, attractions, budgetBreakdown, carbon, aiPlan, selectedRouteId, handleRouteSelect, handleRouteHover, origin, destination, date, travellers]);
+    ai: <AiCopilotPanel />,
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [routes, weather, foodStops, essentials, attractions, budgetBreakdown, carbon, aiPlan,
+       selectedRouteId, handleRouteSelect, handleRouteHover, origin, destination,
+       date, travellers, budgetData, tripData, multiDayPlan]);
+
+
 
   const selectedRoute = routes.find(r => r.id === selectedRouteId) ?? null;
 
@@ -411,7 +652,14 @@ function JourneyContent() {
 
   return (
     <>
+      {/* ── Group I: Geolocation consent modal ── */}
+      <GeolocationConsent
+        open={showGeoConsent}
+        onDismiss={() => setShowGeoConsent(false)}
+      />
+
       {/* ── Mobile view toggle bar ── */}
+
       <div className="md:hidden flex items-center justify-center gap-2 py-2 px-4 border-b border-white/5 bg-black/30 shrink-0">
         <button
           onClick={() => setMobileView("routes")}
@@ -462,7 +710,10 @@ function JourneyContent() {
                   <span className="text-[9px] px-2 py-0.5 rounded-full bg-brand-cyan/15 text-brand-cyan border border-brand-cyan/25 font-bold animate-pulse">
                     ✓ {t("aiPlanReady", language)}
                   </span>
+                  {/* Phase 1 — Journey health badge */}
+                  <JourneyHealthBadge />
                 </div>
+
                 <p className="text-xs text-slate-500 mt-0.5 font-medium">
                   {new Date(date).toLocaleDateString(language === "en" ? "en-GB" : language === "hi" ? "hi-IN" : "ml-IN", {
                     weekday: "short", day: "numeric", month: "long"
@@ -485,9 +736,15 @@ function JourneyContent() {
                 </div>
               ))}
             </div>
+
+            {/* Phase 6 — Export / Share bar */}
+            <div className="mt-2.5">
+              <TripExportBar />
+            </div>
           </div>
 
           {/* Offline notice */}
+
           {isOfflineMode && (
             <div className="px-4 py-2 bg-amber-500/15 border-b border-amber-500/20 text-[10px] text-amber-400 font-bold flex gap-1.5 items-center shrink-0">
               <WifiOff className="w-3.5 h-3.5 animate-pulse" />
@@ -548,13 +805,20 @@ function JourneyContent() {
           </div>
         </div>
 
-        {/* ── Sticky Map Panel ── */}
+        {/* ── Sticky Map Panel (relative so DeviationBanner can overlay) ── */}
         <div
-          className={`right-panel ${
+          className={`right-panel relative ${
             mobileView === "routes" ? "hidden md:block" : "block"
           }`}
         >
-          <MapWrapper
+          <DeviationBanner
+            visible={deviationDetected}
+            onRecalculate={() => {
+              // Trigger a fresh route fetch from current live position
+              setDeviation(false);
+            }}
+          />
+          <JourneyMap
             origin={origin}
             destination={destination}
             routeGeometry={routeGeometry}
@@ -565,13 +829,21 @@ function JourneyContent() {
             activeSegmentCoords={activeSegmentCoords || undefined}
             selectedRoute={selectedRoute}
             allRoutes={routes}
+            liveCoords={liveCoords}
           />
         </div>
 
+
       </div>
+
+      {/* ── Phase 4: Voice Copilot FAB ───────────────────────────────────────── */}
+      {/* Floating bottom-right. Hidden on mobile map view to avoid overlap. */}
+      <VoiceCopilot position="bottom-right" maxHistory={5} />
+
     </>
   );
 }
+
 
 export default function JourneyPage() {
   return (

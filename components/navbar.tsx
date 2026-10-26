@@ -3,10 +3,14 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Route, Menu, X, Sun, Moon, LayoutDashboard, Map, Home, Globe, ShieldAlert, Wifi, WifiOff } from "lucide-react";
+import { Route, Menu, X, Sun, Moon, LayoutDashboard, Map, Home, Globe, ShieldAlert, Wifi, WifiOff, Compass, Folder, User } from "lucide-react";
+
 import { motion, AnimatePresence } from "framer-motion";
 import { useSettings } from "@/lib/settings-context";
 import { t, Language } from "@/services/translations";
+import { useUserProfile, useIsTracking, useSettingsActions } from "@/hooks/useTripStore";
+
+
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
@@ -16,6 +20,9 @@ export default function Navbar() {
   
   const pathname = usePathname();
   const { language, setLanguage, setEmergencyMode } = useSettings();
+  const userProfile = useUserProfile();
+  const isTracking = useIsTracking();
+  const { revokeGeolocationConsent } = useSettingsActions();
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -64,8 +71,15 @@ export default function Navbar() {
   const navLinks = [
     { name: language === "en" ? "Home" : language === "hi" ? "होम" : "ഹോം", href: "/", icon: Home },
     { name: language === "en" ? "Planner" : language === "hi" ? "योजनाकार" : "പ്ലാനർ", href: "/planner", icon: Map },
+    { name: language === "en" ? "Explore" : language === "hi" ? "अन्वेषण" : "പര്യവേക്ഷണം", href: "/explore", icon: Compass },
     { name: language === "en" ? "Dashboard" : language === "hi" ? "डैशबोर्ड" : "ഡാഷ്‌ബോർഡ്", href: "/dashboard", icon: LayoutDashboard },
+    { name: language === "en" ? "Trips" : language === "hi" ? "यात्राएं" : "യാത്രകൾ", href: "/trips", icon: Folder },
+    { name: language === "en" ? "Profile" : language === "hi" ? "प्रोफ़ाइल" : "പ്രൊഫൈൽ", href: "/profile", icon: User, emoji: userProfile.avatarEmoji },
+    { name: language === "en" ? "SOS" : language === "hi" ? "आपातकाल" : "SOS", href: "/emergency", icon: ShieldAlert },
   ];
+
+
+
 
   return (
     <header
@@ -81,11 +95,20 @@ export default function Navbar() {
           <Link href="/" className="flex items-center space-x-2.5 group">
             <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-cyan/20 to-brand-blue/20 border border-brand-cyan/30 group-hover:border-brand-cyan/60 transition-all duration-300">
               <Route className="w-5 h-5 text-brand-cyan group-hover:rotate-12 transition-transform duration-300" />
+              {/* Group P — Live tracking indicator */}
+              {isTracking && (
+                <span
+                  className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-brand-cyan rounded-full animate-ping"
+                  aria-label="Live location active"
+                  title="Live location active"
+                />
+              )}
             </div>
             <span className="font-display font-bold text-xl tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
               Flow<span className="text-brand-cyan">Route</span>
             </span>
           </Link>
+
 
           {/* Desktop Navigation */}
           <nav className="hidden md:flex items-center space-x-6">
@@ -97,7 +120,11 @@ export default function Navbar() {
                   href={link.href}
                   className="relative text-sm font-medium transition-colors hover:text-brand-cyan py-1 flex items-center gap-1.5"
                 >
-                  <link.icon className="w-3.5 h-3.5" />
+                  {'emoji' in link && link.emoji ? (
+                    <span className="text-sm leading-none">{link.emoji}</span>
+                  ) : (
+                    <link.icon className="w-3.5 h-3.5" />
+                  )}
                   <span className={isActive ? "text-brand-cyan" : "text-slate-400"}>
                     {link.name}
                   </span>
@@ -112,6 +139,7 @@ export default function Navbar() {
               );
             })}
           </nav>
+
 
           {/* Right Controls */}
           <div className="hidden md:flex items-center space-x-3">
@@ -134,7 +162,20 @@ export default function Navbar() {
               )}
             </div>
 
+            {/* Group P — Live location badge + revoke */}
+            {isTracking && (
+              <button
+                onClick={revokeGeolocationConsent}
+                title="Stop live location tracking"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-brand-cyan/30 bg-brand-cyan/10 text-brand-cyan text-xs font-semibold hover:bg-red-500/10 hover:border-red-500/30 hover:text-red-400 transition-all duration-200 group"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-cyan animate-ping group-hover:bg-red-400" />
+                <span>Live</span>
+              </button>
+            )}
+
             {/* Language Dropdown */}
+
             <div className="relative group/lang">
               <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white/5 border border-white/10 hover:border-brand-cyan/30 text-slate-400 hover:text-brand-cyan transition-all duration-300">
                 <Globe className="w-4 h-4" />
@@ -235,11 +276,16 @@ export default function Navbar() {
                         : "text-slate-400 hover:text-white hover:bg-white/5"
                     }`}
                   >
-                    <link.icon className="w-4 h-4" />
+                    {'emoji' in link && link.emoji ? (
+                      <span className="text-base leading-none">{link.emoji}</span>
+                    ) : (
+                      <link.icon className="w-4 h-4" />
+                    )}
                     {link.name}
                   </Link>
                 );
               })}
+
               
               {/* Language selection in mobile menu */}
               <div className="pt-2 border-t border-white/5 flex gap-2">

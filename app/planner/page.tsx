@@ -15,7 +15,9 @@ import {
   Mic,
   MicOff,
   Shield,
-  Accessibility
+  Accessibility,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { travelPreferences } from "@/lib/mockData";
 import type { TravelPreference } from "@/types/journey";
@@ -26,8 +28,44 @@ import { useSettings } from "@/lib/settings-context";
 import { t } from "@/services/translations";
 import { useVoice } from "@/hooks/useVoice";
 import { parseQueryWithAI } from "@/services/ai";
+// Phase 1 — new planner components
+import { TravelerProfileCard } from "@/components/planner/TravelerProfileCard";
+import { DateRangePicker } from "@/components/planner/DateRangePicker";
+import { AccommodationPrefsSelector } from "@/components/planner/AccommodationPrefsSelector";
+
+/** Collapsible Phase 1 trip details section embedded in the planner form. */
+function TripDetailsSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-white/10 overflow-hidden">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-3 py-2.5 bg-white/5 hover:bg-white/10 transition-colors text-xs font-semibold text-slate-400"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span>🗓 Trip Details &amp; Traveler Type</span>
+        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {open && (
+        <div className="flex flex-col gap-4 p-3 bg-black/10">
+          <div>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Who is travelling?</p>
+            <TravelerProfileCard />
+          </div>
+          <DateRangePicker />
+          <div>
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Accommodation type</p>
+            <AccommodationPrefsSelector />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function PlannerPage() {
+
   const router = useRouter();
   const { language, safetyMode, setSafetyMode } = useSettings();
   
@@ -307,6 +345,7 @@ export default function PlannerPage() {
                     <input
                       id="origin-input"
                       type="text"
+                      role="combobox"
                       aria-label={t("fromPlaceholder", language)}
                       aria-autocomplete="list"
                       aria-expanded={showOriginPanel && originSuggestions.length > 0}
@@ -317,6 +356,7 @@ export default function PlannerPage() {
                       onFocus={() => setShowOriginPanel(true)}
                       className="w-full bg-black/40 border border-white/8 focus:border-brand-cyan/50 rounded-xl pl-11 pr-9 py-3 text-sm text-slate-200 placeholder-slate-500 outline-none transition-colors"
                     />
+
                     {originQuery && (
                       <button 
                         onClick={() => { setOriginQuery(""); setOrigin(null); }} 
@@ -360,6 +400,7 @@ export default function PlannerPage() {
                     <input
                       id="dest-input"
                       type="text"
+                      role="combobox"
                       aria-label={t("toPlaceholder", language)}
                       aria-autocomplete="list"
                       aria-expanded={showDestPanel && destSuggestions.length > 0}
@@ -370,6 +411,7 @@ export default function PlannerPage() {
                       onFocus={() => setShowDestPanel(true)}
                       className="w-full bg-black/40 border border-white/8 focus:border-brand-blue/50 rounded-xl pl-11 pr-9 py-3 text-sm text-slate-200 placeholder-slate-500 outline-none transition-colors"
                     />
+
                     {destQuery && (
                       <button 
                         onClick={() => { setDestQuery(""); setDestination(null); }} 
@@ -535,7 +577,11 @@ export default function PlannerPage() {
                   </div>
                 </div>
 
+                {/* Phase 1 — Trip Details Section */}
+                <TripDetailsSection />
+
                 {/* Search Button */}
+
                 <button
                   onClick={handleSearch}
                   disabled={isSearching}
